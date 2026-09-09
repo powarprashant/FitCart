@@ -43,6 +43,11 @@ jobs:
 
       - name: Trivy scan - vulnerabilities & secrets (blocking)
         uses: aquasecurity/trivy-action@master
+        env:
+          # Don't reach out to Maven Central / npm to resolve versions —
+          # shared runner IPs get 429'd. Built-image scans below stay authoritative.
+          TRIVY_OFFLINE_SCAN: "true"
+          TRIVY_SKIP_DIRS: "**/target,**/node_modules"
         with:
           scan-type: fs
           scan-ref: .
