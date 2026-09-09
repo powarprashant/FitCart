@@ -1,115 +1,137 @@
-name: CI-CD-AKS
+name: CI
 
 on:
   push:
     branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  DB_IMAGE: postgres:14   # upstream DB image to mirror into ECR
+
 jobs:
 
-  build_scan_push:
+  scan:
+    name: Scan (Gitleaks)
     runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for Gitleaks
+
+      - name: Run Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: "--verbose --redact --exit-code 1"
+
+  code-scan:
+    name: Code scan (Trivy fs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy scan - vulnerabilities & secrets (blocking)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+      - name: Trivy scan - misconfiguration (advisory)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          format: table
+
+  build_scan_push:
+    name: Build, scan & push to ECR
+    runs-on: ubuntu-latest
+    needs: [scan, code-scan]
 
     outputs:
       image_tag: ${{ steps.tag.outputs.sha }}
+      backend_image: ${{ steps.image.outputs.backend }}
+      frontend_image: ${{ steps.image.outputs.frontend }}
+      db_image: ${{ steps.image.outputs.db }}
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # Generate Image Tag (Commit SHA)
-      - name: Set Image Tag
+      - name: Set Image Tag (commit SHA)
         id: tag
-        run: echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+        run: echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      # DockerHub Login
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # Install Trivy via shell (no action version dependency)
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compose image references
+        id: image
+        run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
+          echo "backend=${REGISTRY}/${ECR_REPOSITORY}:backend-${{ steps.tag.outputs.sha }}" >> "$GITHUB_OUTPUT"
+          echo "frontend=${REGISTRY}/${ECR_REPOSITORY}:frontend-${{ steps.tag.outputs.sha }}" >> "$GITHUB_OUTPUT"
+          echo "db=${REGISTRY}/${ECR_REPOSITORY}:db-${DB_IMAGE##*:}" >> "$GITHUB_OUTPUT"
+
       - name: Install Trivy
         run: |
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
           trivy --version
 
-      # Filesystem Scan
-      - name: Trivy Filesystem Scan
-        run: trivy fs --exit-code 0 --severity HIGH,CRITICAL .
-
-      # Backend Build
+      # ---------- Backend ----------
       - name: Build Backend Image
-        run: |
-          docker build -t ${{ secrets.DOCKER_REPO_BACKEND }}:${{ steps.tag.outputs.sha }} ./backend
+        run: docker build -t "${{ steps.image.outputs.backend }}" ./backend
 
-      # Backend Image Scan
-      - name: Scan Backend Image
-        run: |
-          trivy image --exit-code 0 --severity HIGH,CRITICAL ${{ secrets.DOCKER_REPO_BACKEND }}:${{ steps.tag.outputs.sha }}
+      - name: Scan Backend Image (Trivy)
+        run: trivy image --exit-code 0 --severity HIGH,CRITICAL "${{ steps.image.outputs.backend }}"
 
-      - name: Push Backend Image
-        run: |
-          docker push ${{ secrets.DOCKER_REPO_BACKEND }}:${{ steps.tag.outputs.sha }}
+      - name: Push Backend Image to ECR
+        run: docker push "${{ steps.image.outputs.backend }}"
 
-      # Frontend Build
+      # ---------- Frontend ----------
       - name: Build Frontend Image
+        run: docker build -t "${{ steps.image.outputs.frontend }}" ./frontend
+
+      - name: Scan Frontend Image (Trivy)
+        run: trivy image --exit-code 0 --severity HIGH,CRITICAL "${{ steps.image.outputs.frontend }}"
+
+      - name: Push Frontend Image to ECR
+        run: docker push "${{ steps.image.outputs.frontend }}"
+
+      # ---------- Database (mirror upstream image into ECR) ----------
+      - name: Pull upstream DB Image
+        run: docker pull "${DB_IMAGE}"
+
+      - name: Scan DB Image (Trivy)
+        run: trivy image --exit-code 0 --severity HIGH,CRITICAL "${DB_IMAGE}"
+
+      - name: Retag & Push DB Image to ECR
         run: |
-          docker build -t ${{ secrets.DOCKER_REPO_FRONTEND }}:${{ steps.tag.outputs.sha }} ./frontend
-
-      # Frontend Image Scan
-      - name: Scan Frontend Image
-        run: |
-          trivy image --exit-code 0 --severity HIGH,CRITICAL ${{ secrets.DOCKER_REPO_FRONTEND }}:${{ steps.tag.outputs.sha }}
-
-      - name: Push Frontend Image
-        run: |
-          docker push ${{ secrets.DOCKER_REPO_FRONTEND }}:${{ steps.tag.outputs.sha }}
-
-
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build_scan_push
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      # Azure Login using Service Principal JSON
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # Get AKS Credentials
-      - name: Get AKS Credentials
-        run: |
-          az aks get-credentials \
-            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
-            --name ${{ secrets.AKS_CLUSTER_NAME }} \
-            --overwrite-existing
-
-      # Install Helm
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-
-      # Helm Lint (Prevents YAML mistakes)
-      - name: Helm Lint
-        run: helm lint ./helm/crud-app-chart
-
-      # Deploy using Helm
-      - name: Helm Deploy to AKS
-        run: |
-          helm upgrade --install crud-app ./helm/crud-app-chart \
-            --namespace crud-app \
-            --create-namespace \
-            --wait \
-            --timeout 5m \
-            --set backend.image.repository=${{ secrets.DOCKER_REPO_BACKEND }} \
-            --set backend.image.tag=${{ needs.build_scan_push.outputs.image_tag }} \
-            --set frontend.image.repository=${{ secrets.DOCKER_REPO_FRONTEND }} \
-            --set frontend.image.tag=${{ needs.build_scan_push.outputs.image_tag }}
+          docker tag "${DB_IMAGE}" "${{ steps.image.outputs.db }}"
+          docker push "${{ steps.image.outputs.db }}"
