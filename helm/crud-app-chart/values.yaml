@@ -2,16 +2,16 @@ replicaCount: 1
 
 frontend:
   image:
-    repository: jamiekariuki/crud-app
-    tag: "frontend-16105052287"
+    repository: 654654241151.dkr.ecr.us-east-1.amazonaws.com/demo-app
+    tag: "frontend-b014b4b"
 
 backend:
   image:
-    repository: jamiekariuki/crud-app
-    tag: "backend-16105052289"
+    repository: 654654241151.dkr.ecr.us-east-1.amazonaws.com/demo-app
+    tag: "backend-b014b4b"
 
 postgres:
   image: postgres:14
   storage:
     size: 5Gi
-    storageClass: managed-csi
+    storageClass: gp3
