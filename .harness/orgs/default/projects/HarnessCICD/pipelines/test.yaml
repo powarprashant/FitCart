@@ -29,16 +29,46 @@ pipeline:
           execution:
             steps:
               - step:
+                  type: Background
+                  name: postgres
+                  identifier: postgres
+                  spec:
+                    connectorRef: account.harnessImage
+                    image: postgres:16
+                    shell: Sh
+                    envVariables:
+                      POSTGRES_USER: fitcart
+                      POSTGRES_PASSWORD: fitcart_ci
+                      POSTGRES_DB: fitcart
+                    portBindings:
+                      "5432": "5432"
+              - step:
                   type: Run
                   name: Build_Backend
                   identifier: Build_Backend
                   spec:
                     connectorRef: account.harnessImage
                     image: maven:3.9-eclipse-temurin-21
-                    shell: Sh
+                    shell: Bash
+                    envVariables:
+                      DB_HOST: postgres
+                      DB_PORT: "5432"
+                      DB_NAME: fitcart
+                      DB_USER: fitcart
+                      DB_PASSWORD: fitcart_ci
+                      FRONTEND_ORIGIN: http://localhost:5173
                     command: |-
                       java -version
-                      mvn -version
                       cd backend
-                      mvn -B -ntp clean package -DskipTests
+                      echo "Waiting for PostgreSQL at $DB_HOST:$DB_PORT ..."
+                      for i in $(seq 1 30); do
+                        (echo > /dev/tcp/$DB_HOST/$DB_PORT) >/dev/null 2>&1 && break
+                        sleep 2
+                      done
+                      mvn -B -ntp clean package
                       ls -l target/*.jar
+                    reports:
+                      type: JUnit
+                      spec:
+                        paths:
+                          - backend/target/surefire-reports/*.xml
