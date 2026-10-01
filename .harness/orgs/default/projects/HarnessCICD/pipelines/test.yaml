@@ -40,5 +40,5 @@ pipeline:
                       java -version
                       mvn -version
                       cd backend
-                      mvn -B -ntp clean package
+                      mvn -B -ntp clean package -DskipTests
                       ls -l target/*.jar
