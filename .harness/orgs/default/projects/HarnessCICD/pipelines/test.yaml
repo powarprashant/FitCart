@@ -44,3 +44,4 @@ pipeline:
                       #    ls -l target/*.jar
                       ls -l
                       java --version
+                      mvn --version
