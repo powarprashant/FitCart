@@ -45,3 +45,6 @@ pipeline:
                       ls -l
                       java --version
                       mvn --version
+                      cd backend   
+                      mvn -B clean package
+                      ls -l target/*.jar
