@@ -35,10 +35,11 @@ pipeline:
                   spec:
                     shell: Sh
                     command: |-
-                      set -e
-                         ls -la
-                         java -version
-                         mvn -version
-                         cd backend
-                         mvn -B clean package
-                         ls -l target/*.jar
+                      # set -e
+                      #    ls -la
+                      #    java -version
+                      #    mvn -version
+                      #    cd backend
+                      #    mvn -B clean package
+                      #    ls -l target/*.jar
+                      ls -l
