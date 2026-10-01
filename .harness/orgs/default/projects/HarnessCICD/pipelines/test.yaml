@@ -43,3 +43,4 @@ pipeline:
                       #    mvn -B clean package
                       #    ls -l target/*.jar
                       ls -l
+                      java --version
