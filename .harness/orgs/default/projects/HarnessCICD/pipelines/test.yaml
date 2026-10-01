@@ -7,7 +7,8 @@ pipeline:
   properties:
     ci:
       codebase:
-        connectorRef: git
+        connectorRef: account.Github_OAuth_1748501034671
+        repoName: FitCart
         build: <+input>
   stages:
     - stage:
@@ -30,21 +31,16 @@ pipeline:
             steps:
               - step:
                   type: Run
-                  name: Run_1
-                  identifier: Run_1
+                  name: Build_Backend
+                  identifier: Build_Backend
                   spec:
+                    connectorRef: account.harnessImage
+                    image: maven:3.9-eclipse-temurin-21
                     shell: Sh
                     command: |-
-                      # set -e
-                      #    ls -la
-                      #    java -version
-                      #    mvn -version
-                      #    cd backend
-                      #    mvn -B clean package
-                      #    ls -l target/*.jar
-                      ls -l
-                      java --version
-                      mvn --version
-                      cd backend   
-                      mvn -B clean package
+                      java -version
+                      mvn -version
+                      cd backend
+                      mvn -B -ntp clean package
+                                       
                       ls -l target/*.jar
